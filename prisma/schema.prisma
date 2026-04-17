@@ -1,0 +1,667 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  EDITOR
+  VIEWER
+}
+
+enum SiteSourceType {
+  MANUAL
+  SITEMAP
+  CRAWL
+  CMS
+}
+
+enum SiteCrawlStatus {
+  IDLE
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum PageLifecycleStatus {
+  DISCOVERED
+  ACTIVE
+  DRAFT_ONLY
+  ARCHIVED
+  ERROR
+}
+
+enum PageSourceStatus {
+  CRAWLED
+  IMPORTED
+  MANUAL
+  GENERATED
+}
+
+enum PageVersionState {
+  LIVE_SNAPSHOT
+  DRAFT
+  HISTORICAL
+}
+
+enum PageVersionSource {
+  CRAWL
+  MANUAL
+  AI_DRAFT
+  IMPORT
+  CMS_PUBLISH
+}
+
+enum ScanTriggerType {
+  INITIAL_INGEST
+  MANUAL_RESCAN
+  POST_PUBLISH_VERIFY
+  SCHEDULED_RESCAN
+}
+
+enum ScanRunStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum FindingType {
+  BLOCKER
+  WARNING
+  STRENGTH
+  ENTITY_GAP
+  LINK_GAP
+  FRESHNESS_GAP
+  EXTRACTABILITY_GAP
+  CONVERSION_GAP
+  AUTHORITY_GAP
+}
+
+enum RecommendationType {
+  QUICK_WIN
+  STRUCTURAL_CHANGE
+  AUTHORITY_PROJECT
+  REWRITE_REQUIRED
+  NEW_PAGE_NEEDED
+}
+
+enum RecommendationStatus {
+  OPEN
+  LINKED_TO_DRAFT
+  IN_PROGRESS
+  RESOLVED
+  DISMISSED
+}
+
+enum RecommendationResolutionState {
+  UNRESOLVED
+  AUTO_RESOLVED_AFTER_RESCAN
+  MANUALLY_RESOLVED
+  SUPERSEDED
+  NOT_APPLICABLE
+}
+
+enum RecommendationBatchStatus {
+  ACTIVE
+  SUPERSEDED
+}
+
+enum ClusterMembershipRole {
+  PILLAR
+  SUPPORTING
+  MISSING
+  WEAK
+}
+
+enum ClusterMembershipSource {
+  MANUAL
+  INFERRED
+}
+
+enum EntityType {
+  BUSINESS
+  EXPERT
+  REVIEWER
+  INSTITUTION
+  PRODUCT
+  SERVICE
+  LOCATION
+  CERTIFICATION
+  PUBLICATION
+  CREDENTIAL
+  AFFILIATION
+}
+
+enum EntitySignalType {
+  AUTHOR
+  REVIEWER
+  INSTITUTION
+  CREDENTIAL
+  SERVICE
+  PRODUCT
+  LOCATION
+  PUBLICATION
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum TaskStatus {
+  OPEN
+  IN_PROGRESS
+  BLOCKED
+  DONE
+  CANCELED
+}
+
+enum MissingPageStatus {
+  OPEN
+  DRAFT_CREATED
+  TASK_CREATED
+  PUBLISHED
+  DISMISSED
+}
+
+enum ApplyOperationType {
+  EXPORT_COPY
+  CMS_PUBLISH_ATTEMPT
+  CMS_PUBLISH_SUCCESS
+  ROUTE_VERIFY
+  MANUAL_PUBLISH_MARK
+}
+
+enum ApplyOperationStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+model Workspace {
+  id                       String                   @id @default(cuid())
+  name                     String
+  slug                     String                   @unique
+  createdAt                DateTime                 @default(now())
+  updatedAt                DateTime                 @updatedAt
+  users                    WorkspaceUser[]
+  sites                    Site[]
+  pages                    Page[]
+  scanRuns                 ScanRun[]
+  scoreSnapshots           ScoreSnapshot[]
+  recommendationBatches    RecommendationBatch[]
+  recommendations          Recommendation[]
+  clusters                 Cluster[]
+  missingPageOpportunities MissingPageOpportunity[]
+  entities                 Entity[]
+  tasks                    Task[]
+  applyOperations          ApplyOperation[]
+  changeLogs               ChangeLog[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceUser {
+  id            String        @id @default(cuid())
+  workspaceId   String
+  email         String
+  name          String?
+  role          WorkspaceRole
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownedClusters Cluster[]     @relation("ClusterOwner")
+  ownedTasks    Task[]        @relation("TaskOwner")
+  changeLogs    ChangeLog[]   @relation("ChangeLogActor")
+
+  @@unique([workspaceId, email])
+  @@index([workspaceId, role])
+  @@map("workspace_users")
+}
+
+model Site {
+  id          String          @id @default(cuid())
+  workspaceId String
+  name        String
+  domain      String          @unique
+  baseUrl     String?
+  sourceType  SiteSourceType  @default(MANUAL)
+  crawlStatus SiteCrawlStatus @default(IDLE)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  pages       Page[]
+
+  @@index([workspaceId])
+  @@index([workspaceId, crawlStatus])
+  @@map("sites")
+}
+
+model Page {
+  id                              String                   @id @default(cuid())
+  workspaceId                     String
+  siteId                          String
+  url                             String
+  canonicalUrl                    String?
+  path                            String
+  slug                            String
+  title                           String?
+  pageType                        String?
+  lifecycleStatus                 PageLifecycleStatus
+  sourceStatus                    PageSourceStatus
+  existsLive                      Boolean                  @default(false)
+  isIndexable                     Boolean?
+  routeLastVerifiedAt             DateTime?
+  currentLivePageVersionId        String?
+  latestScanRunId                 String?
+  latestSuccessfulScanRunId       String?
+  latestScoreSnapshotId           String?
+  latestSuccessfulScoreSnapshotId String?
+  createdAt                       DateTime                 @default(now())
+  updatedAt                       DateTime                 @updatedAt
+  workspace                       Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  site                            Site                     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  versions                        PageVersion[]            @relation("PageVersions")
+  currentLivePageVersion          PageVersion?             @relation("CurrentLivePageVersion", fields: [currentLivePageVersionId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  scanRuns                        ScanRun[]                @relation("PageScanRuns")
+  latestScanRun                   ScanRun?                 @relation("LatestScanRun", fields: [latestScanRunId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  latestSuccessfulScanRun         ScanRun?                 @relation("LatestSuccessfulScanRun", fields: [latestSuccessfulScanRunId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  scoreSnapshots                  ScoreSnapshot[]          @relation("PageScoreSnapshots")
+  latestScoreSnapshot             ScoreSnapshot?           @relation("LatestScoreSnapshot", fields: [latestScoreSnapshotId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  latestSuccessfulScoreSnapshot   ScoreSnapshot?           @relation("LatestSuccessfulScoreSnapshot", fields: [latestSuccessfulScoreSnapshotId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  scanFindings                    ScanFinding[]
+  recommendationBatches           RecommendationBatch[]
+  recommendations                 Recommendation[]
+  draftLinks                      DraftLink[]
+  clusterMemberships              ClusterMembership[]
+  missingPageOpportunities        MissingPageOpportunity[]
+  entitySignals                   PageEntitySignal[]
+  linkedTasks                     Task[]                   @relation("TaskLinkedPage")
+  applyOperations                 ApplyOperation[]
+  changeLogs                      ChangeLog[]
+
+  @@unique([siteId, path])
+  @@unique([siteId, slug])
+  @@unique([siteId, url])
+  @@index([workspaceId, lifecycleStatus])
+  @@index([siteId, lifecycleStatus])
+  @@index([currentLivePageVersionId])
+  @@index([latestScanRunId])
+  @@index([latestSuccessfulScanRunId])
+  @@index([latestScoreSnapshotId])
+  @@index([latestSuccessfulScoreSnapshotId])
+  @@map("pages")
+}
+
+model PageVersion {
+  id                       String                @id @default(cuid())
+  pageId                   String
+  parentPageVersionId      String?
+  contentState             PageVersionState
+  contentSource            PageVersionSource
+  contentHash              String?
+  title                    String?
+  metaDescription          String?
+  htmlBlobKey              String?
+  markdownBlobKey          String?
+  extractedJson            Json?
+  createdBy                String?
+  createdAt                DateTime              @default(now())
+  page                     Page                  @relation("PageVersions", fields: [pageId], references: [id], onDelete: Cascade)
+  parentPageVersion        PageVersion?          @relation("PageVersionLineage", fields: [parentPageVersionId], references: [id], onDelete: SetNull)
+  childPageVersions        PageVersion[]         @relation("PageVersionLineage")
+  liveForPages             Page[]                @relation("CurrentLivePageVersion")
+  scanRuns                 ScanRun[]
+  scanFindings             ScanFinding[]
+  scoreSnapshots           ScoreSnapshot[]
+  generatedRecommendations Recommendation[]      @relation("RecommendationGeneratedFromPageVersion")
+  resolvedRecommendations  Recommendation[]      @relation("RecommendationResolvedByPageVersion")
+  draftLinks               DraftLink[]           @relation("DraftPageVersionLinks")
+  entitySignals            PageEntitySignal[]
+  applyOperations          ApplyOperation[]
+  recommendationBatches    RecommendationBatch[]
+
+  @@index([pageId, contentState])
+  @@index([parentPageVersionId])
+  @@index([contentHash])
+  @@map("page_versions")
+}
+
+model ScanRun {
+  id                       String                @id @default(cuid())
+  workspaceId              String
+  pageId                   String?
+  pageVersionId            String?
+  triggerType              ScanTriggerType
+  status                   ScanRunStatus
+  failureCode              String?
+  errorMessage             String?
+  startedAt                DateTime?
+  completedAt              DateTime?
+  createdAt                DateTime              @default(now())
+  workspace                Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  page                     Page?                 @relation("PageScanRuns", fields: [pageId], references: [id], onDelete: SetNull)
+  pageVersion              PageVersion?          @relation(fields: [pageVersionId], references: [id], onDelete: SetNull)
+  findings                 ScanFinding[]
+  scoreSnapshots           ScoreSnapshot[]
+  recommendationBatches    RecommendationBatch[]
+  recommendations          Recommendation[]      @relation("RecommendationGeneratedFromScanRun")
+  latestForPages           Page[]                @relation("LatestScanRun")
+  latestSuccessfulForPages Page[]                @relation("LatestSuccessfulScanRun")
+
+  @@index([workspaceId, status])
+  @@index([pageId, status])
+  @@index([pageVersionId])
+  @@map("scan_runs")
+}
+
+model ScanFinding {
+  id            String       @id @default(cuid())
+  scanRunId     String
+  pageId        String?
+  pageVersionId String?
+  findingType   FindingType
+  code          String
+  title         String
+  severity      Int
+  evidenceJson  Json?
+  explanation   String?
+  createdAt     DateTime     @default(now())
+  scanRun       ScanRun      @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
+  page          Page?        @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  pageVersion   PageVersion? @relation(fields: [pageVersionId], references: [id], onDelete: SetNull)
+
+  @@index([scanRunId, findingType])
+  @@index([pageId])
+  @@index([pageVersionId])
+  @@map("scan_findings")
+}
+
+model ScoreSnapshot {
+  id                       String       @id @default(cuid())
+  workspaceId              String
+  pageId                   String?
+  pageVersionId            String?
+  scanRunId                String?
+  overallScore             Decimal?     @db.Decimal(5, 2)
+  answerClarityScore       Decimal?     @db.Decimal(5, 2)
+  topicalSpecificityScore  Decimal?     @db.Decimal(5, 2)
+  authorityTrustScore      Decimal?     @db.Decimal(5, 2)
+  expertVisibilityScore    Decimal?     @db.Decimal(5, 2)
+  extractabilityScore      Decimal?     @db.Decimal(5, 2)
+  internalLinkingScore     Decimal?     @db.Decimal(5, 2)
+  snippetUniquenessScore   Decimal?     @db.Decimal(5, 2)
+  conversionClarityScore   Decimal?     @db.Decimal(5, 2)
+  entityConsistencyScore   Decimal?     @db.Decimal(5, 2)
+  updateReadinessScore     Decimal?     @db.Decimal(5, 2)
+  confidence               Decimal?     @db.Decimal(5, 2)
+  severity                 Int?
+  blockersCount            Int          @default(0)
+  reasonCodesJson          Json?
+  createdAt                DateTime     @default(now())
+  workspace                Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  page                     Page?        @relation("PageScoreSnapshots", fields: [pageId], references: [id], onDelete: SetNull)
+  pageVersion              PageVersion? @relation(fields: [pageVersionId], references: [id], onDelete: SetNull)
+  scanRun                  ScanRun?     @relation(fields: [scanRunId], references: [id], onDelete: SetNull)
+  latestForPages           Page[]       @relation("LatestScoreSnapshot")
+  latestSuccessfulForPages Page[]       @relation("LatestSuccessfulScoreSnapshot")
+
+  @@index([workspaceId, createdAt])
+  @@index([pageId, createdAt])
+  @@index([pageVersionId])
+  @@index([scanRunId])
+  @@map("score_snapshots")
+}
+
+model RecommendationBatch {
+  id              String                    @id @default(cuid())
+  workspaceId     String
+  pageId          String?
+  scanRunId       String?
+  pageVersionId   String?
+  status          RecommendationBatchStatus
+  createdAt       DateTime                  @default(now())
+  workspace       Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  page            Page?                     @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  scanRun         ScanRun?                  @relation(fields: [scanRunId], references: [id], onDelete: SetNull)
+  pageVersion     PageVersion?              @relation(fields: [pageVersionId], references: [id], onDelete: SetNull)
+  recommendations Recommendation[]
+
+  @@index([workspaceId, status])
+  @@index([pageId])
+  @@index([scanRunId])
+  @@index([pageVersionId])
+  @@map("recommendation_batches")
+}
+
+model Recommendation {
+  id                         String                        @id @default(cuid())
+  workspaceId                String
+  pageId                     String?
+  recommendationBatchId      String?
+  generatedFromScanRunId     String?
+  generatedFromPageVersionId String?
+  type                       RecommendationType
+  priority                   TaskPriority
+  severity                   Int?
+  title                      String
+  description                String?
+  whyItMatters               String?
+  evidenceJson               Json?
+  status                     RecommendationStatus
+  resolutionState            RecommendationResolutionState
+  fingerprint                String
+  resolvedByPageVersionId    String?
+  resolvedAt                 DateTime?
+  createdAt                  DateTime                      @default(now())
+  updatedAt                  DateTime                      @updatedAt
+  previousRecommendationId   String?
+  workspace                  Workspace                     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  page                       Page?                         @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  recommendationBatch        RecommendationBatch?          @relation(fields: [recommendationBatchId], references: [id], onDelete: SetNull)
+  generatedFromScanRun       ScanRun?                      @relation("RecommendationGeneratedFromScanRun", fields: [generatedFromScanRunId], references: [id], onDelete: SetNull)
+  generatedFromPageVersion   PageVersion?                  @relation("RecommendationGeneratedFromPageVersion", fields: [generatedFromPageVersionId], references: [id], onDelete: SetNull)
+  resolvedByPageVersion      PageVersion?                  @relation("RecommendationResolvedByPageVersion", fields: [resolvedByPageVersionId], references: [id], onDelete: SetNull)
+  previousRecommendation     Recommendation?               @relation("RecommendationReconciliation", fields: [previousRecommendationId], references: [id], onDelete: SetNull)
+  nextRecommendations        Recommendation[]              @relation("RecommendationReconciliation")
+  draftLinks                 DraftLink[]
+  linkedTasks                Task[]                        @relation("TaskLinkedRecommendation")
+
+  @@unique([workspaceId, fingerprint])
+  @@index([workspaceId, status])
+  @@index([pageId])
+  @@index([recommendationBatchId])
+  @@index([generatedFromScanRunId])
+  @@index([generatedFromPageVersionId])
+  @@index([resolvedByPageVersionId])
+  @@index([previousRecommendationId])
+  @@map("recommendations")
+}
+
+model DraftLink {
+  id                 String          @id @default(cuid())
+  pageId             String
+  draftPageVersionId String
+  recommendationId   String?
+  createdAt          DateTime        @default(now())
+  page               Page            @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  draftPageVersion   PageVersion     @relation("DraftPageVersionLinks", fields: [draftPageVersionId], references: [id], onDelete: Cascade)
+  recommendation     Recommendation? @relation(fields: [recommendationId], references: [id], onDelete: SetNull)
+
+  @@unique([pageId, draftPageVersionId, recommendationId])
+  @@index([draftPageVersionId])
+  @@index([recommendationId])
+  @@map("draft_links")
+}
+
+model Cluster {
+  id                       String                   @id @default(cuid())
+  workspaceId              String
+  name                     String
+  topic                    String?
+  ownerUserId              String?
+  healthScore              Decimal?                 @db.Decimal(5, 2)
+  createdAt                DateTime                 @default(now())
+  updatedAt                DateTime                 @updatedAt
+  workspace                Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUser                WorkspaceUser?           @relation("ClusterOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  memberships              ClusterMembership[]
+  missingPageOpportunities MissingPageOpportunity[]
+  linkedTasks              Task[]                   @relation("TaskLinkedCluster")
+
+  @@index([workspaceId, name])
+  @@index([ownerUserId])
+  @@map("clusters")
+}
+
+model ClusterMembership {
+  id        String                  @id @default(cuid())
+  clusterId String
+  pageId    String
+  role      ClusterMembershipRole
+  source    ClusterMembershipSource
+  createdAt DateTime                @default(now())
+  cluster   Cluster                 @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  page      Page                    @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([clusterId, pageId])
+  @@index([pageId])
+  @@map("cluster_memberships")
+}
+
+model MissingPageOpportunity {
+  id            String            @id @default(cuid())
+  workspaceId   String
+  clusterId     String?
+  pageId        String?
+  proposedTitle String?
+  proposedSlug  String?
+  pageType      String?
+  rationale     String?
+  status        MissingPageStatus
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  workspace     Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  cluster       Cluster?          @relation(fields: [clusterId], references: [id], onDelete: SetNull)
+  page          Page?             @relation(fields: [pageId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([clusterId])
+  @@index([pageId])
+  @@map("missing_page_opportunities")
+}
+
+model Entity {
+  id            String             @id @default(cuid())
+  workspaceId   String
+  entityType    EntityType
+  name          String
+  canonicalName String?
+  metadataJson  Json?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  workspace     Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  pageSignals   PageEntitySignal[]
+
+  @@index([workspaceId, entityType])
+  @@index([workspaceId, name])
+  @@map("entities")
+}
+
+model PageEntitySignal {
+  id              String           @id @default(cuid())
+  pageId          String
+  pageVersionId   String?
+  entityId        String
+  signalType      EntitySignalType
+  visibilityScore Decimal?         @db.Decimal(5, 2)
+  evidenceJson    Json?
+  createdAt       DateTime         @default(now())
+  page            Page             @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  pageVersion     PageVersion?     @relation(fields: [pageVersionId], references: [id], onDelete: SetNull)
+  entity          Entity           @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@index([pageId, signalType])
+  @@index([pageVersionId])
+  @@index([entityId])
+  @@map("page_entity_signals")
+}
+
+model Task {
+  id                     String          @id @default(cuid())
+  workspaceId            String
+  linkedPageId           String?
+  linkedClusterId        String?
+  linkedRecommendationId String?
+  title                  String
+  description            String?
+  priority               TaskPriority
+  status                 TaskStatus
+  ownerUserId            String?
+  dueDate                DateTime?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  workspace              Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  linkedPage             Page?           @relation("TaskLinkedPage", fields: [linkedPageId], references: [id], onDelete: SetNull)
+  linkedCluster          Cluster?        @relation("TaskLinkedCluster", fields: [linkedClusterId], references: [id], onDelete: SetNull)
+  linkedRecommendation   Recommendation? @relation("TaskLinkedRecommendation", fields: [linkedRecommendationId], references: [id], onDelete: SetNull)
+  ownerUser              WorkspaceUser?  @relation("TaskOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([linkedPageId])
+  @@index([linkedClusterId])
+  @@index([linkedRecommendationId])
+  @@index([ownerUserId])
+  @@map("tasks")
+}
+
+model ApplyOperation {
+  id            String               @id @default(cuid())
+  workspaceId   String
+  pageId        String?
+  pageVersionId String?
+  operationType ApplyOperationType
+  status        ApplyOperationStatus
+  outputJson    Json?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  workspace     Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  page          Page?                @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  pageVersion   PageVersion?         @relation(fields: [pageVersionId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([pageId])
+  @@index([pageVersionId])
+  @@map("apply_operations")
+}
+
+model ChangeLog {
+  id          String         @id @default(cuid())
+  workspaceId String
+  pageId      String?
+  actorUserId String?
+  objectType  String
+  objectId    String
+  actionType  String
+  payloadJson Json?
+  createdAt   DateTime       @default(now())
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  page        Page?          @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  actorUser   WorkspaceUser? @relation("ChangeLogActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([pageId])
+  @@index([actorUserId])
+  @@index([objectType, objectId])
+  @@map("change_logs")
+}
